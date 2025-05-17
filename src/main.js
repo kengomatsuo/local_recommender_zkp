@@ -33,6 +33,7 @@ import {
   WEIGHT_COMMENTED,
   MIN_INTERACTIONS
 } from './model.js';
+import { fetchPosts } from './api.js';
 
 // Preference weighting constants
 
@@ -235,30 +236,19 @@ async function loadBatch() {
     lastAnalyzed = await analyzeInteractions(interactions);
 
     // Build API parameters
-    const params = new URLSearchParams();
-    if (lastAnalyzed.topics.length) params.append("topics", lastAnalyzed.topics.join(","));
-    if (lastAnalyzed.hashtags.length) params.append("hashtags", lastAnalyzed.hashtags.join(","));
-    params.append("limit", BATCH_SIZE);
+    const params = {};
+    if (lastAnalyzed.topics.length) params.topics = lastAnalyzed.topics.map(t => t.name || t);
+    if (lastAnalyzed.hashtags.length) params.hashtags = lastAnalyzed.hashtags.map(h => h.name || h);
+    params.limit = BATCH_SIZE;
 
-    // Fetch posts with error handling
+    // Fetch posts with error handling using the API module
     try {
-      const res = await fetch(
-        "http://localhost:3000/api/posts?" + params.toString()
-      );
-
-      if (!res.ok) {
-        throw new Error(`API error: ${res.status} ${res.statusText}`);
-      }
-
-      const data = await res.json();
-
+      const data = await fetchPosts(params);
       // Update batch state
       batch = data.posts || [];
       current = 0;
-
       // Update topics and hashtags based on new posts
       updateSeenTopicsAndHashtags(batch);
-
       console.log("Loaded batch:", batch);
     } catch (fetchError) {
       console.error("Error fetching posts:", fetchError);
