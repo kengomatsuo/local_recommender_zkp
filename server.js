@@ -20,14 +20,23 @@ try {
 
 // Enable CORS for local dev
 app.use((req, res, next) => {
-  const allowedOrigins = ['http://localhost:3000', 'http://127.0.0.1:3000', 'http://localhost:5173/'];
+  const allowedOrigins = ['http://localhost:3000', 'http://127.0.0.1:3000', 'http://localhost:5173', 'http://localhost:4000'];
   const origin = req.headers.origin;
+
   if (allowedOrigins.includes(origin)) {
     res.header('Access-Control-Allow-Origin', origin);
   }
-  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept');
+
+  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, X-ZKP-Proof, X-ZKP-PublicSignals');
+  res.header('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(200);
+  }
+
   next();
 });
+
 
 app.use(express.json()); // Add this to parse JSON bodies
 
@@ -111,6 +120,46 @@ app.get('/api/posts', (req, res) => {
     limit,
     total: posts.length
   });
+});
+
+// Load verification key
+const vKey = JSON.parse(fs.readFileSync(path.join(__dirname, "keys", "vk.json")));
+
+// Verify ZKP before allowing post fetch
+app.use('/api/posts', async (req, res, next) => {
+  const proofHeader = req.headers['x-zkp-proof'];
+  const publicSignalsHeader = req.headers['x-zkp-publicsignals'];
+
+  if (!proofHeader || !publicSignalsHeader) {
+    console.warn("Missing ZKP headers");
+    return res.status(401).json({ error: 'Authentication required' });
+  }
+
+  try {
+    const proof = JSON.parse(proofHeader);
+    const publicSignals = JSON.parse(publicSignalsHeader);
+
+    const isValid = await snarkjs.groth16.verify(vKey, publicSignals, proof);
+
+    if (!isValid) {
+      console.warn("Invalid ZKP");
+      return res.status(403).json({ error: 'Invalid authentication proof' });
+    }
+
+    // Check Merkle root matches expected
+    const expectedRoot = "3659df8a4bfb87fbf444433c10d49d0e6434ac6c18072d9eaf14802efe00a5e5"; // Update if your root changes
+    if (publicSignals[0] !== expectedRoot) {
+      console.warn("Merkle root mismatch");
+      return res.status(403).json({ error: 'Merkle root mismatch' });
+    }
+
+    // Attach verified flag
+    req.authenticated = true;
+    next();
+  } catch (error) {
+    console.error("Error verifying ZKP:", error);
+    return res.status(400).json({ error: 'Malformed authentication data' });
+  }
 });
 
 app.listen(PORT, () => {

@@ -31,9 +31,9 @@ import {
   WEIGHT_INTERESTED,
   WEIGHT_NOT_INTERESTED,
   WEIGHT_COMMENTED,
-  MIN_INTERACTIONS
-} from './model.js';
-import { fetchPosts } from './api.js';
+  MIN_INTERACTIONS,
+} from "./model.js";
+import { fetchPosts, generateZKPProof } from "./api.js";
 
 // Preference weighting constants
 
@@ -128,7 +128,7 @@ async function recordInteraction(type, post) {
   const prevState = {
     liked: inter.liked,
     interested: inter.interested,
-    not_interested: inter.not_interested
+    not_interested: inter.not_interested,
   };
 
   // Update interaction state based on type
@@ -151,8 +151,8 @@ async function recordInteraction(type, post) {
     newState: {
       liked: inter.liked,
       interested: inter.interested,
-      not_interested: inter.not_interested
-    }
+      not_interested: inter.not_interested,
+    },
   });
 
   // Update time spent if this is the current post
@@ -237,13 +237,27 @@ async function loadBatch() {
 
     // Build API parameters
     const params = {};
-    if (lastAnalyzed.topics.length) params.topics = lastAnalyzed.topics.map(t => t.name || t);
-    if (lastAnalyzed.hashtags.length) params.hashtags = lastAnalyzed.hashtags.map(h => h.name || h);
+    if (lastAnalyzed.topics.length)
+      params.topics = lastAnalyzed.topics.map((t) => t.name || t);
+    if (lastAnalyzed.hashtags.length)
+      params.hashtags = lastAnalyzed.hashtags.map((h) => h.name || h);
     params.limit = BATCH_SIZE;
 
     // Fetch posts with error handling using the API module
     try {
-      const data = await fetchPosts(params);
+      const auth = await generateZKPProof(
+        "ab2f20d2e957149afeda6cfa09efedcf0986809fcd6bfd4cd83fca58033f311f", // Example Leaf
+        "4b197fc392cd047e0a1b4467778294600329e08f7bcd41d13cdf46779a2c494f", // Merkle Root
+        [
+          "e3c58b672d729be3cf3f6dca66bc9bedf0bedcae1fdb356d6c3760f5e65d4fb5",
+          "ca0637690eb8669c2e89d6655ae5825a4f6b2c645be5f582f8e57166674519c3",
+          "0b68be77c15ed75d63846072b00497c8d5351f884590e9a98bc65220ed53823b",
+        ], // Hex Path
+        [1, 1, 1] // Directions
+      );
+
+      console.log("ZKP authentication successful, fetching posts...");
+      const data = await fetchPosts(params, auth);
       // Update batch state
       batch = data.posts || [];
       current = 0;
@@ -427,13 +441,12 @@ function handleVisibilityChange() {
 function renderInteractionHistory() {
   try {
     // Sort interactions by time (most recent first)
-    const allInteractions = interactions.slice().sort(
-      (a, b) => b.timestamp - a.timestamp
-    );
+    const allInteractions = interactions
+      .slice()
+      .sort((a, b) => b.timestamp - a.timestamp);
 
     let html = "<b>User Interactions</b><br>";
-    html +=
-      '<ul style="margin:0 0 10px 0;padding-left:18px;overflow:auto;">';
+    html += '<ul style="margin:0 0 10px 0;padding-left:18px;overflow:auto;">';
 
     // Generate list items for each interaction
     for (const inter of allInteractions) {
@@ -498,11 +511,15 @@ async function renderModelStatus() {
     } else {
       html += `<b>Next API Topics</b><br>
         <div style='word-break:break-all;color:#14a'>
-          [${(lastAnalyzed.topics || []).map((t) => `{ name: '${t.name}', weight: ${t.weight.toFixed(3)} }`).join(", ")}]
+          [${(lastAnalyzed.topics || [])
+            .map((t) => `{ name: '${t.name}', weight: ${t.weight.toFixed(3)} }`)
+            .join(", ")}]
         </div>
         <b>Next API Hashtags</b><br>
         <div style='word-break:break-all;color:#14a'>
-          [${(lastAnalyzed.hashtags || []).map((h) => `{ name: '${h.name}', weight: ${h.weight.toFixed(3)} }`).join(", ")}]
+          [${(lastAnalyzed.hashtags || [])
+            .map((h) => `{ name: '${h.name}', weight: ${h.weight.toFixed(3)} }`)
+            .join(", ")}]
         </div>`;
     }
 
