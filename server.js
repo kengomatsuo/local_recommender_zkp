@@ -152,7 +152,7 @@ app.use('/api/posts', async (req, res, next) => {
       console.warn("Merkle root mismatch");
       return res.status(403).json({ error: 'Merkle root mismatch' });
     }
-
+    console.log("ZKP verified successfully");
     // Attach verified flag
     req.authenticated = true;
     next();
