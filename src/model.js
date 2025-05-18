@@ -1,5 +1,5 @@
 // model.js
-// Model logic separated from main.js
+// Model logic separated from main.js with enhanced persistency
 
 // ML Model State
 export let tfModel = null;
@@ -8,6 +8,11 @@ export let modelTraining = false;
 export let modelTrainingPromise = null;
 export let MODEL_TOPICS = [];
 export let MODEL_HASHTAGS = [];
+
+// New storage for previous arrays
+export let previousTopicsResults = [];  // Store previous topic analysis results
+export let previousHashtagsResults = []; // Store previous hashtag analysis results
+export const MAX_STORED_RESULTS = 5;    // Maximum number of previous results to store
 
 // Preference weighting constants
 export const WEIGHT_LIKED = 3.0;
@@ -60,8 +65,54 @@ export async function loadModel(force = false) {
   }
 }
 
-// Train model
-export async function trainModel(interactionsArr) {
+// Store results to persistent storage
+export function storeResults(topics, hashtags) {
+  // Add current results to the storage arrays
+  if (topics && topics.length > 0) {
+    previousTopicsResults.push([...topics]);
+    // Keep only the last MAX_STORED_RESULTS
+    if (previousTopicsResults.length > MAX_STORED_RESULTS) {
+      previousTopicsResults.shift();
+    }
+  }
+  
+  if (hashtags && hashtags.length > 0) {
+    previousHashtagsResults.push([...hashtags]);
+    // Keep only the last MAX_STORED_RESULTS
+    if (previousHashtagsResults.length > MAX_STORED_RESULTS) {
+      previousHashtagsResults.shift();
+    }
+  }
+  
+  // Optional: Store to localStorage for persistence between sessions
+  try {
+    localStorage.setItem('modelPreviousTopics', JSON.stringify(previousTopicsResults));
+    localStorage.setItem('modelPreviousHashtags', JSON.stringify(previousHashtagsResults));
+  } catch (e) {
+    console.warn('Could not save model results to localStorage', e);
+  }
+}
+
+// Load previously stored results
+export function loadStoredResults() {
+  try {
+    const storedTopics = localStorage.getItem('modelPreviousTopics');
+    const storedHashtags = localStorage.getItem('modelPreviousHashtags');
+    
+    if (storedTopics) {
+      previousTopicsResults = JSON.parse(storedTopics);
+    }
+    
+    if (storedHashtags) {
+      previousHashtagsResults = JSON.parse(storedHashtags);
+    }
+  } catch (e) {
+    console.warn('Could not load stored model results', e);
+  }
+}
+
+// Train model with option to use previous data
+export async function trainModel(interactionsArr, usePreviousData = true) {
   if (modelTraining || MODEL_TOPICS.length === 0) return;
   const interactions = interactionsArr;
   if (interactions.length < MIN_INTERACTIONS) return;
@@ -70,8 +121,12 @@ export async function trainModel(interactionsArr) {
     await loadModel(true);
     modelTraining = true;
     modelTrainingPromise = new Promise((r) => (resolveTraining = r));
+    
+    // Initialize with current interactions
     const recentInteractions = interactions.slice(-100);
     const xs = [], ys = [];
+    
+    // Process current interactions
     for (const inter of recentInteractions) {
       if (!inter.topics || !Array.isArray(inter.topics)) continue;
       let preferenceScore = 0;
@@ -96,6 +151,26 @@ export async function trainModel(interactionsArr) {
       xs.push(x);
       ys.push(y);
     }
+    
+    // Add previous learned patterns if enabled
+    if (usePreviousData && previousTopicsResults.length > 0) {
+      // Use previous topic results to augment training
+      for (const prevTopics of previousTopicsResults) {
+        const prevTopicNames = prevTopics.map(t => t.name);
+        
+        // Generate synthetic data points based on previous high-weight topics
+        for (const topic of prevTopics.filter(t => t.weight > 0.3)) {
+          const x = MODEL_TOPICS.map((t) => t === topic.name ? 1 : 
+            (prevTopicNames.includes(t) ? 0.5 : 0));
+          const y = [0, 0, 0];
+          // Create a more positive signal for previously important topics
+          y[2] = topic.weight > 0.6 ? 1 : 0.8;
+          xs.push(x);
+          ys.push(y);
+        }
+      }
+    }
+    
     if (xs.length > 0 && xs[0].length > 0) {
       const xsTensor = tf.tensor2d(xs);
       const ysTensor = tf.tensor2d(ys);
@@ -120,45 +195,134 @@ export async function trainModel(interactionsArr) {
   }
 }
 
-// Analyze interactions
-export async function analyzeInteractions(interactionsArr) {
+// Analyze interactions with option to incorporate previous results
+export async function analyzeInteractions(interactionsArr, blendPreviousResults = true) {
   const interactions = interactionsArr;
   if (MODEL_TOPICS.length === 0) return { topics: [], hashtags: [] };
   if (interactions.length < MIN_INTERACTIONS) return { topics: [], hashtags: [] };
-  if (!modelTrained) return analyzeWithoutModel(interactions);
-  await loadModel(false);
-  const topicInputs = MODEL_TOPICS.map((t, i) =>
-    MODEL_TOPICS.map((_, j) => (i === j ? 1 : 0))
-  );
-  const topicTensor = tf.tensor2d(topicInputs);
-  const topicPreds = tfModel.predict(topicTensor).arraySync();
-  topicTensor.dispose();
-  const scoredTopics = MODEL_TOPICS.map((t, i) => ({
-    name: t,
-    weight: topicPreds[i][2] - topicPreds[i][0],
-  }));
-  scoredTopics.sort((a, b) => b.weight - a.weight);
-  const splitIdx = findNaturalSplit(scoredTopics, 0.1, 'weight');
-  const topTopics = scoredTopics.slice(0, splitIdx).filter((e) => e.weight > 0.1);
-  // Hashtag analysis
-  const hashtagInputs = MODEL_HASHTAGS.map((h, i) =>
-    MODEL_TOPICS.map((t) =>
-      interactions.some(
-        (inter) => (inter.hashtags || []).includes(h) && (inter.topics || []).includes(t)
-      ) ? 1 : 0
-    )
-  );
-  const hashtagTensor = tf.tensor2d(hashtagInputs);
-  const hashtagPreds = tfModel.predict(hashtagTensor).arraySync();
-  hashtagTensor.dispose();
-  const scoredHashtags = MODEL_HASHTAGS.map((h, i) => ({
-    name: h,
-    weight: hashtagPreds[i][2] - hashtagPreds[i][0],
-  }));
-  scoredHashtags.sort((a, b) => b.weight - a.weight);
-  const splitHIdx = findNaturalSplit(scoredHashtags, 0.1, 'weight');
-  const topHashtags = scoredHashtags.slice(0, splitHIdx).filter((e) => e.weight > 0.1);
-  return { topics: topTopics, hashtags: topHashtags };
+  
+  let results;
+  if (!modelTrained) {
+    results = analyzeWithoutModel(interactions);
+  } else {
+    await loadModel(false);
+    const topicInputs = MODEL_TOPICS.map((t, i) =>
+      MODEL_TOPICS.map((_, j) => (i === j ? 1 : 0))
+    );
+    const topicTensor = tf.tensor2d(topicInputs);
+    const topicPreds = tfModel.predict(topicTensor).arraySync();
+    topicTensor.dispose();
+    const scoredTopics = MODEL_TOPICS.map((t, i) => ({
+      name: t,
+      weight: topicPreds[i][2] - topicPreds[i][0],
+    }));
+    scoredTopics.sort((a, b) => b.weight - a.weight);
+    const splitIdx = findNaturalSplit(scoredTopics, 0.1, 'weight');
+    const topTopics = scoredTopics.slice(0, splitIdx).filter((e) => e.weight > 0.1);
+    
+    // Hashtag analysis
+    const hashtagInputs = MODEL_HASHTAGS.map((h, i) =>
+      MODEL_TOPICS.map((t) =>
+        interactions.some(
+          (inter) => (inter.hashtags || []).includes(h) && (inter.topics || []).includes(t)
+        ) ? 1 : 0
+      )
+    );
+    const hashtagTensor = tf.tensor2d(hashtagInputs);
+    const hashtagPreds = tfModel.predict(hashtagTensor).arraySync();
+    hashtagTensor.dispose();
+    const scoredHashtags = MODEL_HASHTAGS.map((h, i) => ({
+      name: h,
+      weight: hashtagPreds[i][2] - hashtagPreds[i][0],
+    }));
+    scoredHashtags.sort((a, b) => b.weight - a.weight);
+    const splitHIdx = findNaturalSplit(scoredHashtags, 0.1, 'weight');
+    const topHashtags = scoredHashtags.slice(0, splitHIdx).filter((e) => e.weight > 0.1);
+    
+    results = { topics: topTopics, hashtags: topHashtags };
+  }
+  
+  // Blend with previous results if requested
+  if (blendPreviousResults && previousTopicsResults.length > 0) {
+    results = blendWithPreviousResults(results);
+  }
+  
+  // Store the current results
+  storeResults(results.topics, results.hashtags);
+  
+  return results;
+}
+
+// Blend current results with previous ones for stability
+export function blendWithPreviousResults(currentResults) {
+  if (previousTopicsResults.length === 0) return currentResults;
+  
+  const blendedTopics = [...currentResults.topics];
+  const blendedHashtags = [...currentResults.hashtags];
+  
+  // Create maps for quick lookup
+  const topicMap = new Map(blendedTopics.map(t => [t.name, t]));
+  const hashtagMap = new Map(blendedHashtags.map(h => [h.name, h]));
+  
+  // Calculate recency weights (more recent = higher weight)
+  const recencyWeights = Array(previousTopicsResults.length)
+    .fill(0)
+    .map((_, i) => 0.8 ** (previousTopicsResults.length - i - 1));
+  
+  // Add topics from previous results with decaying importance
+  for (let i = 0; i < previousTopicsResults.length; i++) {
+    const recencyWeight = recencyWeights[i];
+    const prevTopics = previousTopicsResults[i];
+    
+    for (const prevTopic of prevTopics) {
+      if (topicMap.has(prevTopic.name)) {
+        // Blend with existing topic
+        const current = topicMap.get(prevTopic.name);
+        current.weight = current.weight * 0.7 + prevTopic.weight * 0.3 * recencyWeight;
+      } else if (prevTopic.weight > 0.3) {
+        // Add previous topic with decayed weight if it was important
+        blendedTopics.push({
+          name: prevTopic.name,
+          weight: prevTopic.weight * 0.4 * recencyWeight
+        });
+        topicMap.set(prevTopic.name, blendedTopics[blendedTopics.length - 1]);
+      }
+    }
+  }
+  
+  // Do the same for hashtags if we have previous results
+  if (previousHashtagsResults.length > 0) {
+    const hashtagRecencyWeights = Array(previousHashtagsResults.length)
+      .fill(0)
+      .map((_, i) => 0.8 ** (previousHashtagsResults.length - i - 1));
+      
+    for (let i = 0; i < previousHashtagsResults.length; i++) {
+      const recencyWeight = hashtagRecencyWeights[i];
+      const prevHashtags = previousHashtagsResults[i];
+      
+      for (const prevHashtag of prevHashtags) {
+        if (hashtagMap.has(prevHashtag.name)) {
+          const current = hashtagMap.get(prevHashtag.name);
+          current.weight = current.weight * 0.7 + prevHashtag.weight * 0.3 * recencyWeight;
+        } else if (prevHashtag.weight > 0.3) {
+          blendedHashtags.push({
+            name: prevHashtag.name,
+            weight: prevHashtag.weight * 0.4 * recencyWeight
+          });
+          hashtagMap.set(prevHashtag.name, blendedHashtags[blendedHashtags.length - 1]);
+        }
+      }
+    }
+  }
+  
+  // Resort and filter by weight threshold
+  blendedTopics.sort((a, b) => b.weight - a.weight);
+  blendedHashtags.sort((a, b) => b.weight - a.weight);
+  
+  return {
+    topics: blendedTopics.filter(t => t.weight > 0.1),
+    hashtags: blendedHashtags.filter(h => h.weight > 0.1)
+  };
 }
 
 // Simple analysis method when model isn't ready
@@ -244,4 +408,17 @@ export function findNaturalSplit(items, minThreshold = 0.1, scoreKey = "score") 
     return Math.min(5, items.filter(item => item[scoreKey] > minThreshold).length);
   }
   return splitIdx;
+}
+
+// Initialize the system
+export function initializeModelSystem() {
+  // Load any previously stored results
+  loadStoredResults();
+  
+  // Return initial state
+  return {
+    hasPreviousData: previousTopicsResults.length > 0,
+    previousTopicsCount: previousTopicsResults.length,
+    previousHashtagsCount: previousHashtagsResults.length
+  };
 }

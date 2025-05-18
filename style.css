@@ -14,6 +14,8 @@ body, html {
   align-items: center;
   justify-content: center;
   overflow: hidden;
+  position: fixed;
+  z-index: 2;
 }
 .post {
   width: 100vw;

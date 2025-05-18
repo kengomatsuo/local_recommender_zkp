@@ -1,8 +1,4 @@
-/**
- * Fixed Feed Recommendation System
- * Addresses race conditions, memory leaks, inconsistent UI updates,
- * and performance issues in the original implementation.
- */
+import { previousTopicsResults, previousHashtagsResults } from "./model.js";
 
 // DOM Elements
 const FEED = document.getElementById("feed");
@@ -65,13 +61,13 @@ function setupUIElements() {
   // Interaction history sidebar
   INTERACTIONS_DIV.id = "interactions-history";
   INTERACTIONS_DIV.style =
-    "position:fixed;right:0;top:0;width:340px;max-height:100vh;overflow:auto;background:#fff;border-left:1px solid #ccc;padding:10px;font-size:0.95em;z-index:1000;box-shadow:-2px 0 8px #0001;";
+    "position:fixed;right:0;top:0;width:340px;height:100vh;overflow:auto;background:#fff;border-left:1px solid #ccc;padding:10px;font-size:0.95em;z-index:1;box-shadow:-2px 0 8px #0001;";
   document.body.appendChild(INTERACTIONS_DIV);
 
   // Model status sidebar
   MODEL_STATUS_DIV.id = "model-status";
   MODEL_STATUS_DIV.style =
-    "position:fixed;left:0;top:0;width:340px;max-width:100vw;max-height:100vh;overflow:auto;background:#fff;border-right:1px solid #ccc;padding:10px;font-size:0.95em;z-index:1000;box-shadow:2px 0 8px #0001;";
+    "position:fixed;left:0;top:0;width:340px;max-width:100vw;height:100vh;overflow:auto;background:#fff;border-right:1px solid #ccc;padding:10px;font-size:0.95em;z-index:1;box-shadow:2px 0 8px #0001;";
   document.body.appendChild(MODEL_STATUS_DIV);
 }
 
@@ -122,6 +118,11 @@ async function recordInteraction(type, post) {
       timestamp: Date.now(),
     };
     interactions.push(inter);
+
+    // Trim to keep only the last 100 interactions
+    if (interactions.length > 100) {
+      interactions = interactions.slice(-100);
+    }
   }
 
   // Previous state for logging
@@ -220,9 +221,13 @@ function resetIdleTimer() {
   }, IDLE_TIME_MS);
 }
 
+let isLoadingBatch = false;
+
 // Load a new batch of posts
 async function loadBatch() {
+  if (isLoadingBatch) return;
   try {
+    isLoadingBatch = true;
     // Record time spent on current post before loading new batch
     recordTimeSpentOnCurrentPost();
 
@@ -272,6 +277,8 @@ async function loadBatch() {
     }
   } catch (error) {
     console.error("Error in loadBatch:", error);
+  } finally {
+    isLoadingBatch = false;
   }
 }
 
@@ -502,26 +509,28 @@ async function renderModelStatus() {
     //     [${MODEL_TOPICS.map((t) => `'${t}'`).join(", ")}]
     //   </div>`;
 
-    // Add API params info
-    if (modelTraining) {
-      html += `<b>Next API Topics</b><br>
-        <div style='color:#aaa;font-style:italic;'>Updating...</div>
-        <b>Next API Hashtags</b><br>
-        <div style='color:#aaa;font-style:italic;'>Updating...</div>`;
-    } else {
-      html += `<b>Next API Topics</b><br>
-        <div style='word-break:break-all;color:#14a'>
-          [${(lastAnalyzed.topics || [])
-            .map((t) => `{ name: '${t.name}', weight: ${t.weight.toFixed(3)} }`)
-            .join(", ")}]
-        </div>
-        <b>Next API Hashtags</b><br>
-        <div style='word-break:break-all;color:#14a'>
-          [${(lastAnalyzed.hashtags || [])
-            .map((h) => `{ name: '${h.name}', weight: ${h.weight.toFixed(3)} }`)
-            .join(", ")}]
-        </div>`;
-    }
+    // Show most recent previous topics/hashtags instead of lastAnalyzed
+    const latestTopics = previousTopicsResults.at(-1) || [];
+    const latestHashtags = previousHashtagsResults.at(-1) || [];
+
+    html += `<b>Next API Topics</b><br>
+      <div style='word-break:break-all;color:#14a'>
+        [${latestTopics
+          .map(
+            (t) =>
+              `{ name: '${t.name}', weight: ${t.weight?.toFixed(3) ?? "?"} }`
+          )
+          .join(", ")}]
+      </div>
+      <b>Next API Hashtags</b><br>
+      <div style='word-break:break-all;color:#14a'>
+        [${latestHashtags
+          .map(
+            (h) =>
+              `{ name: '${h.name}', weight: ${h.weight?.toFixed(3) ?? "?"} }`
+          )
+          .join(", ")}]
+      </div>`;
 
     MODEL_STATUS_DIV.innerHTML = html;
   } catch (error) {
