@@ -1,6 +1,7 @@
 import { defineConfig } from 'vite';
 
 export default defineConfig({
+  base: '/local-recommender-zkp/',
   root: '.',
   publicDir: 'public',
   server: {
