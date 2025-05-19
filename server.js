@@ -20,20 +20,12 @@ try {
 
 // Enable CORS for local dev
 app.use((req, res, next) => {
-  const allowedOrigins = ['http://localhost:3000', 'http://127.0.0.1:3000', 'http://localhost:5173', 'http://localhost:4000'];
-  const origin = req.headers.origin;
-
-  if (allowedOrigins.includes(origin)) {
-    res.header('Access-Control-Allow-Origin', origin);
-  }
-
+  res.header('Access-Control-Allow-Origin', '*');
   res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, X-ZKP-Proof, X-ZKP-PublicSignals');
   res.header('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
-
   if (req.method === 'OPTIONS') {
     return res.sendStatus(200);
   }
-
   next();
 });
 

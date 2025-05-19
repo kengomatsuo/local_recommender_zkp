@@ -109,7 +109,7 @@ export async function generateZKPProof(privKey, merkleRoot, pathElements, pathIn
  * @returns {Promise<Object>} - The API response JSON
  */
 export async function fetchPosts(params = {}, auth = null) {
-  const url = new URL("http://localhost:3000/api/posts");
+  const url = new URL("https://79a9-2404-c0-2120-00-1343-4b8.ap.ngrok.io/api/posts");
   Object.entries(params).forEach(([key, value]) => {
     if (Array.isArray(value)) {
       url.searchParams.append(key, value.join(","));
